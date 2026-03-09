@@ -1,0 +1,20 @@
+{
+  "name": "AirOps Suite",
+  "short_name": "AirOps",
+  "description": "Aviation Operations Management — Silesia Air & Airstream Jets",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#070e1d",
+  "theme_color": "#070e1d",
+  "lang": "cs",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "categories": ["business", "productivity"],
+  "shortcuts": [
+    { "name": "Moje lety", "url": "/?module=pilots", "description": "Zobrazit moje lety" },
+    { "name": "Operations", "url": "/?module=operations", "description": "Ops přehled" }
+  ]
+}
