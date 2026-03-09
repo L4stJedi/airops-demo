@@ -360,7 +360,7 @@ const WB_CONFIGS: Record<string, {
   C56X: {
     name: 'Cessna Citation XLS/XLS+ 560',
     oew: 5800, oewArm: 9.82, oewMoment: 56956,
-    lemac: 8.38, mac: 1.651,
+    lemac: 9.46, mac: 1.651,
     zones: [
       { id: 'fwd', label: 'Přední kabina (řady 1–4)', arm: 8.60, maxPax: 4 },
       { id: 'aft', label: 'Zadní kabina (řady 5–8)', arm: 11.20, maxPax: 5 },
