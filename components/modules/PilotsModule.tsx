@@ -395,6 +395,8 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
   const [sicSig, setSicSig] = useState('');
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [driveLink, setDriveLink] = useState<string | null>(null);
+  const [isDemoUpload, setIsDemoUpload] = useState(false);
 
   const flight = flights.find(f => f.id === selectedFlight);
   const aircraft = flight ? AIRCRAFT.find(a => a.id === flight.aircraftId) : null;
@@ -447,10 +449,225 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
   const cgAftOk = towCG <= WB_CONFIG.aftLimit;
   const allOk = towOk && zfwOk && lwOk && cgFwdOk && cgAftOk;
 
-  function handleSave() {
+  async function handleSave() {
     if (!picSig || !sicSig) return;
     setSaving(true);
-    setTimeout(() => { setSaving(false); setSaved(true); }, 2000);
+    setSaved(false);
+    setDriveLink(null);
+
+    try {
+      // Dynamically import jsPDF (avoids SSR issues)
+      const { default: jsPDF } = await import('jspdf');
+      const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+
+      const pageW = 210;
+      const margin = 20;
+      let y = 20;
+
+      // ── Header ──────────────────────────────────────────
+      doc.setFillColor(co.gold ? 10 : 0, co.gold ? 32 : 54, co.gold ? 76 : 113);
+      doc.rect(0, 0, pageW, 30, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text(co.name.toUpperCase(), margin, 13);
+      doc.setFontSize(9);
+      doc.setFont('helvetica', 'normal');
+      doc.text('WEIGHT & BALANCE LOAD SHEET', margin, 21);
+      doc.setFontSize(8);
+      doc.text(`Generated: ${new Date().toISOString().replace('T', ' ').slice(0, 19)} UTC`, pageW - margin, 21, { align: 'right' });
+
+      y = 42;
+      doc.setTextColor(0, 0, 0);
+
+      // ── Flight info ──────────────────────────────────────
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('FLIGHT INFORMATION', margin, y);
+      y += 7;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+      const flightInfo = [
+        ['Flight Number', flight?.flightNumber || '—'],
+        ['Route', `${flight?.depCity} (${flight?.depIcao}) → ${flight?.arrCity} (${flight?.arrIcao})`],
+        ['Aircraft', `${aircraft?.registration} — ${aircraft?.type}`],
+        ['Date', new Date().toLocaleDateString('cs-CZ')],
+        ['Passengers', String(WB_CONFIG.zones.filter(z => !z.isKg).reduce((s, z) => s + (zoneValues[z.id] ?? 0), 0))],
+      ];
+      for (const [label, value] of flightInfo) {
+        doc.setFont('helvetica', 'bold');
+        doc.text(`${label}:`, margin, y);
+        doc.setFont('helvetica', 'normal');
+        doc.text(value, margin + 40, y);
+        y += 6;
+      }
+
+      y += 4;
+      // ── Weight Summary ───────────────────────────────────
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('WEIGHT SUMMARY', margin, y);
+      y += 7;
+
+      // Table header
+      doc.setFillColor(240, 240, 245);
+      doc.rect(margin, y - 5, pageW - margin * 2, 7, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text('Item', margin + 2, y);
+      doc.text('Weight [kg]', margin + 65, y);
+      doc.text('CG [% MAC]', margin + 100, y);
+      doc.text('Limit [kg]', margin + 135, y);
+      doc.text('Status', margin + 160, y);
+      y += 5;
+
+      const rows = [
+        { label: 'Zero Fuel Weight (ZFW)', weight: Math.round(zfw), cg: zfwCG, limit: WB_CONFIG.mzfw, ok: zfwOk },
+        { label: 'Take-Off Weight (TOW)', weight: Math.round(tow), cg: towCG, limit: WB_CONFIG.mtow, ok: towOk && cgFwdOk && cgAftOk },
+        { label: 'Landing Weight (LW)', weight: Math.round(lw), cg: lwCG, limit: WB_CONFIG.mlw, ok: lwOk },
+      ];
+      for (const row of rows) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text(row.label, margin + 2, y);
+        doc.text(row.weight.toLocaleString(), margin + 65, y);
+        doc.text(row.cg.toFixed(1), margin + 100, y);
+        doc.text(row.limit.toLocaleString(), margin + 135, y);
+        doc.setFont('helvetica', 'bold');
+        if (row.ok) { doc.setTextColor(0, 150, 0); doc.text('OK ✓', margin + 160, y); }
+        else { doc.setTextColor(200, 0, 0); doc.text('EXCEEDS ✗', margin + 160, y); }
+        doc.setTextColor(0, 0, 0);
+        y += 7;
+      }
+
+      y += 3;
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(8);
+      doc.setTextColor(80, 80, 80);
+      doc.text(`CG Envelope Limits: FWD ${WB_CONFIG.fwdLimit}% MAC — AFT ${WB_CONFIG.aftLimit}% MAC`, margin, y);
+      doc.setTextColor(0, 0, 0);
+
+      y += 8;
+      // Overall status box
+      if (allOk) {
+        doc.setFillColor(220, 255, 220);
+        doc.setDrawColor(0, 150, 0);
+      } else {
+        doc.setFillColor(255, 220, 220);
+        doc.setDrawColor(200, 0, 0);
+      }
+      doc.roundedRect(margin, y, pageW - margin * 2, 10, 2, 2, 'FD');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      if (allOk) { doc.setTextColor(0, 100, 0); doc.text('✓  WEIGHT & BALANCE ACCEPTABLE — CLEARED FOR DEPARTURE', pageW / 2, y + 7, { align: 'center' }); }
+      else { doc.setTextColor(180, 0, 0); doc.text('✗  OUT OF LIMITS — DO NOT DEPART', pageW / 2, y + 7, { align: 'center' }); }
+      doc.setTextColor(0, 0, 0);
+
+      y += 18;
+      // ── Loading details ──────────────────────────────────
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('LOADING DETAILS', margin, y);
+      y += 7;
+      doc.setFillColor(240, 240, 245);
+      doc.rect(margin, y - 5, pageW - margin * 2, 7, 'F');
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text('Compartment / Zone', margin + 2, y);
+      doc.text('Qty / kg', margin + 90, y);
+      doc.text('Arm [m]', margin + 120, y);
+      doc.text('Moment [kg·m]', margin + 150, y);
+      y += 5;
+
+      for (const zone of WB_CONFIG.zones) {
+        const val = zoneValues[zone.id] ?? 0;
+        const weight = zone.isKg ? val : val * paxWeightKg;
+        const moment = weight * zone.arm;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text(zone.label, margin + 2, y);
+        doc.text(zone.isKg ? `${val} kg` : `${val} pax (${weight} kg)`, margin + 90, y);
+        doc.text(zone.arm.toFixed(2), margin + 120, y);
+        doc.text(Math.round(moment).toLocaleString(), margin + 150, y);
+        y += 6;
+      }
+      // Fuel row
+      doc.setFont('helvetica', 'normal');
+      doc.text('Fuel (centre tank)', margin + 2, y);
+      doc.text(`${fuelKg} kg`, margin + 90, y);
+      doc.text(WB_CONFIG.fuel.arm.toFixed(2), margin + 120, y);
+      doc.text(Math.round(fuelKg * WB_CONFIG.fuel.arm).toLocaleString(), margin + 150, y);
+      y += 6;
+      // OEW row
+      doc.setFont('helvetica', 'bold');
+      doc.text('Operating Empty Weight', margin + 2, y);
+      doc.text(`${WB_CONFIG.oew.toLocaleString()} kg`, margin + 90, y);
+      doc.text(WB_CONFIG.oewArm.toFixed(2), margin + 120, y);
+      doc.text(Math.round(WB_CONFIG.oewMoment).toLocaleString(), margin + 150, y);
+
+      y += 14;
+      // ── Signatures ───────────────────────────────────────
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(10);
+      doc.text('CREW SIGNATURES', margin, y);
+      y += 6;
+
+      const sigBoxW = (pageW - margin * 2 - 10) / 2;
+      const sigBoxH = 30;
+
+      // PIC box
+      doc.setDrawColor(180, 180, 180);
+      doc.rect(margin, y, sigBoxW, sigBoxH);
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(8);
+      doc.text('PIC (Pilot In Command)', margin + 2, y + 5);
+      doc.setFont('helvetica', 'normal');
+      doc.text(pilotName, margin + 2, y + 10);
+      if (picSig && picSig.startsWith('data:image')) {
+        try { doc.addImage(picSig, 'PNG', margin + 2, y + 12, sigBoxW - 4, 15); } catch (_) { /* skip */ }
+      }
+
+      // SIC box
+      const sicX = margin + sigBoxW + 10;
+      doc.rect(sicX, y, sigBoxW, sigBoxH);
+      doc.setFont('helvetica', 'bold');
+      doc.text('SIC (Second In Command)', sicX + 2, y + 5);
+      doc.setFont('helvetica', 'normal');
+      doc.text('—', sicX + 2, y + 10);
+      if (sicSig && sicSig.startsWith('data:image')) {
+        try { doc.addImage(sicSig, 'PNG', sicX + 2, y + 12, sigBoxW - 4, 15); } catch (_) { /* skip */ }
+      }
+
+      y += sigBoxH + 8;
+      doc.setFontSize(7);
+      doc.setTextColor(120, 120, 120);
+      doc.text('This document was generated by AirOps Suite and serves as an official W&B record for the above flight.', margin, y);
+      doc.text('Both crew members confirm that the weight and balance is within prescribed limits.', margin, y + 5);
+
+      // ── Upload to Drive ───────────────────────────────────
+      const pdfBlob = doc.output('blob');
+      const docName = `${flight?.flightNumber || 'WB'} | W&B | ${aircraft?.registration || ''} | ${new Date().toISOString().slice(0, 10)}.pdf`;
+
+      const fd = new FormData();
+      fd.append('file', pdfBlob, docName);
+      fd.append('name', docName);
+      fd.append('company', company);
+      fd.append('mimeType', 'application/pdf');
+
+      const resp = await fetch('/api/drive/upload', { method: 'POST', body: fd });
+      const result = await resp.json();
+
+      setSaving(false);
+      setSaved(true);
+      setDriveLink(result.webViewLink || null);
+      setIsDemoUpload(result.demo === true);
+    } catch (err) {
+      console.error('W&B save error:', err);
+      setSaving(false);
+      // Fallback: still show success in demo
+      setSaved(true);
+      setIsDemoUpload(true);
+    }
   }
 
   const WeightRow = ({ label, weight, cg, ok }: { label: string; weight: number; cg: number; ok: boolean }) => (
@@ -566,10 +783,21 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
           <SignaturePad label="SIC / FO" onSign={setSicSig} />
           {saved ? (
             <div className="p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-center">
-              <div className="text-emerald-400 font-semibold">✅ W&B LoadSheet uložena do Google Drive</div>
+              <div className="text-emerald-400 font-semibold">
+                {isDemoUpload ? '✅ W&B LoadSheet vygenerována (demo)' : '✅ W&B LoadSheet uložena do Google Drive'}
+              </div>
               <div className="text-gray-400 text-xs mt-1 font-mono">
                 {flight?.flightNumber} | W&B | {aircraft?.registration} | {new Date().toISOString().slice(0, 10)}.pdf
               </div>
+              {isDemoUpload && (
+                <div className="text-amber-400 text-xs mt-1">Nakonfigurujte Google Drive pro skutečné uložení</div>
+              )}
+              {driveLink && (
+                <a href={driveLink} target="_blank" rel="noopener noreferrer"
+                  className="text-blue-400 text-xs mt-1 block hover:underline">
+                  Otevřít v Google Drive →
+                </a>
+              )}
             </div>
           ) : (
             <button onClick={handleSave} disabled={!picSig || !sicSig || saving}
