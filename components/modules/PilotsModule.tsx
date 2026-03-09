@@ -348,42 +348,110 @@ function SignaturePad({ label, onSign }: { label: string; onSign: (data: string)
 }
 
 // ─── Weight & Balance ────────────────────────────────────────────────────────
+//
+// All arm values use Fuselage Stations (FS) in INCHES aft of datum,
+// matching the format of real Cessna / Beechcraft AFM documents.
+//
+// ⚠ APPROXIMATION NOTICE ⚠
+// Stations marked with (*) are derived from published aircraft geometry and
+// EASA TCDS reference points (EASA.IM.A.207 / FAA A22CE). Weight limits
+// (MTOW, MLW, MZFW) are from the Type Certificate. All other values MUST be
+// verified against the specific aircraft's W&B Report (AFM §6 / §WB) before
+// operational use. Each aircraft has a unique OEW and OEW CG by serial number.
 
-// Aircraft W&B configurations for private jets
-const WB_CONFIGS: Record<string, {
-  name: string; oew: number; oewArm: number; oewMoment: number;
-  lemac: number; mac: number;
-  zones: Array<{ id: string; label: string; arm: number; maxPax?: number; isKg?: boolean }>;
-  fuel: { arm: number }; mtow: number; mlw: number; mzfw: number;
-  fwdLimit: number; aftLimit: number;
-}> = {
+interface WBZone {
+  id: string; label: string;
+  station: number;    // FS inches aft of datum
+  maxPax?: number; maxKg?: number; isKg?: boolean;
+}
+interface WBEnvPt { weight: number; fwd: number; aft: number; } // weight kg, limits % MAC
+interface WBConfig {
+  name: string; datum: string;
+  mtow: number; mlw: number; mzfw: number;  // kg — from TCDS
+  oew: number; oewStation: number;           // kg, FS in — from aircraft W&B report
+  lemac: number; mac: number;               // FS in, in — from AFM §6
+  zones: WBZone[];
+  fuel: { station: number; maxKg: number }; // FS in
+  envelope: WBEnvPt[];                      // weight-dependent CG limits % MAC
+  stdPaxKg: number;
+}
+
+// Interpolate forward/aft CG limits (% MAC) for a given gross weight
+function getCGLimits(cfg: WBConfig, weight: number): { fwd: number; aft: number } {
+  const e = cfg.envelope;
+  if (weight <= e[0].weight) return { fwd: e[0].fwd, aft: e[0].aft };
+  if (weight >= e[e.length - 1].weight) return { fwd: e[e.length - 1].fwd, aft: e[e.length - 1].aft };
+  for (let i = 0; i < e.length - 1; i++) {
+    if (weight >= e[i].weight && weight <= e[i + 1].weight) {
+      const t = (weight - e[i].weight) / (e[i + 1].weight - e[i].weight);
+      return { fwd: e[i].fwd + t * (e[i + 1].fwd - e[i].fwd), aft: e[i].aft + t * (e[i + 1].aft - e[i].aft) };
+    }
+  }
+  return { fwd: e[0].fwd, aft: e[0].aft };
+}
+
+const WB_CONFIGS: Record<string, WBConfig> = {
   C56X: {
+    // ── Cessna Citation XLS / XLS+ (Model 560XL) ──────────────────────────
+    // Datum: FS 0 at nose tip of aircraft
+    // Weight limits: TCDS A22CE (FAA) / EASA.IM.A.207
+    // Station references: EASA TCDS note "unusable fuel at +247.0 in" anchors
+    // the wing station. All other stations derived from published airframe geometry.
     name: 'Cessna Citation XLS/XLS+ 560',
-    oew: 5800, oewArm: 9.82, oewMoment: 56956,
-    lemac: 9.46, mac: 1.651,
+    datum: 'FS 0 — nose tip (Cessna ref)',
+    mtow: 9163,  // 20,200 lb — TCDS A22CE
+    mlw:  8709,  // 19,200 lb — TCDS A22CE
+    mzfw: 7938,  // 17,500 lb — TCDS A22CE
+    oew:  5806,  // 12,800 lb — typical; REPLACE with aircraft W&B report value (*)
+    oewStation: 247.0, // FS in — approx (wing/fuel centre per EASA TCDS) (*)
+    lemac: 228.0,      // FS in — approx derived from airframe geometry (*)
+    mac:    73.2,      // in    — approx (*)
     zones: [
-      { id: 'fwd', label: 'Přední kabina (řady 1–4)', arm: 8.60, maxPax: 4 },
-      { id: 'aft', label: 'Zadní kabina (řady 5–8)', arm: 11.20, maxPax: 5 },
-      { id: 'fwdBag', label: 'Přední zavazadelník', arm: 4.80, isKg: true },
-      { id: 'aftBag', label: 'Zadní zavazadelník', arm: 13.40, isKg: true },
+      // Stations averaged over seat-row group; row pitch ~18–20 in
+      { id: 'fwd', label: 'Fwd cabin (rows 1–3)',   station: 162.0, maxPax: 4 },  // (*)
+      { id: 'aft', label: 'Aft cabin (rows 4–7)',   station: 225.0, maxPax: 5 },  // (*)
+      { id: 'fwdBag', label: 'Fwd baggage (nose)',  station:  70.0, maxKg: 200, isKg: true }, // (*)
+      { id: 'aftBag', label: 'Aft baggage',         station: 278.0, maxKg: 350, isKg: true }, // (*)
     ],
-    fuel: { arm: 9.44 },
-    mtow: 9163, mlw: 8709, mzfw: 7938,
-    fwdLimit: 13, aftLimit: 33,
+    fuel: { station: 247.0, maxKg: 2932 }, // wing tanks — anchored by EASA TCDS (*)
+    // CG envelope — approximate trapezoidal shape; real boundary from AFM §2 Limitations (*)
+    envelope: [
+      { weight: 5806, fwd: 14.0, aft: 42.0 },
+      { weight: 7938, fwd: 15.0, aft: 40.0 },
+      { weight: 8709, fwd: 16.0, aft: 39.0 },
+      { weight: 9163, fwd: 17.0, aft: 38.0 },
+    ],
+    stdPaxKg: 84,
   },
   BE90: {
+    // ── Beechcraft King Air 90 (Model B90 / C90) ──────────────────────────
+    // Datum: FS 0 at forward face of firewall
+    // Weight limits: TCDS 3A20 (FAA)
+    // Stations: derived from published King Air 90 airframe dimensions (*)
     name: 'Beechcraft King Air 90',
-    oew: 2935, oewArm: 4.88, oewMoment: 14321,
-    lemac: 4.52, mac: 1.601,
+    datum: 'FS 0 — forward face of firewall',
+    mtow: 4581,  // 10,100 lb — TCDS 3A20
+    mlw:  4354,  //  9,600 lb — TCDS 3A20
+    mzfw: 3901,  //  8,600 lb — TCDS 3A20
+    oew:  2935,  //  6,470 lb — typical; REPLACE with aircraft W&B report value (*)
+    oewStation: 192.0, // FS in — approx (*)
+    lemac: 178.0,      // FS in — approx (*)
+    mac:    63.0,      // in    — approx (*)
     zones: [
-      { id: 'fwd', label: 'Přední sedadla (řady 1–2)', arm: 4.20, maxPax: 2 },
-      { id: 'mid', label: 'Střední sedadla (řady 3–4)', arm: 5.10, maxPax: 2 },
-      { id: 'aft', label: 'Zadní sedadla (řady 5–6)', arm: 6.00, maxPax: 2 },
-      { id: 'bag', label: 'Zavazadla (nose + aft)', arm: 6.80, isKg: true },
+      { id: 'fwd', label: 'Fwd seats (rows 1–2)',   station: 155.0, maxPax: 2 }, // (*)
+      { id: 'mid', label: 'Mid seats (rows 3–4)',   station: 183.0, maxPax: 2 }, // (*)
+      { id: 'aft', label: 'Aft seats (rows 5–6)',   station: 211.0, maxPax: 2 }, // (*)
+      { id: 'bag', label: 'Baggage (nose + aft)',   station: 235.0, maxKg: 200, isKg: true }, // (*)
     ],
-    fuel: { arm: 4.96 },
-    mtow: 4581, mlw: 4354, mzfw: 3900,
-    fwdLimit: 14, aftLimit: 30,
+    fuel: { station: 182.0, maxKg: 1200 }, // nacelle + tip tanks — approx (*)
+    // CG envelope — approximate; verify against King Air 90 AFM §2 (*)
+    envelope: [
+      { weight: 2935, fwd: 15.0, aft: 44.0 },
+      { weight: 3901, fwd: 17.0, aft: 42.0 },
+      { weight: 4354, fwd: 18.0, aft: 41.0 },
+      { weight: 4581, fwd: 19.0, aft: 40.0 },
+    ],
+    stdPaxKg: 84,
   },
 };
 
@@ -415,38 +483,46 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
     setZoneValues(prev => ({ ...prev, [id]: val }));
   }
 
-  // Calculate moments
+  // ── Moment calculations (kg·in — stations in FS inches) ──────────────────
   let paxWeight = 0, paxMoment = 0, cargoWeight = 0, cargoMoment = 0;
   for (const zone of WB_CONFIG.zones) {
     const val = zoneValues[zone.id] ?? 0;
     if (zone.isKg) {
       cargoWeight += val;
-      cargoMoment += val * zone.arm;
+      cargoMoment += val * zone.station;
     } else {
       const w = val * paxWeightKg;
       paxWeight += w;
-      paxMoment += w * zone.arm;
+      paxMoment += w * zone.station;
     }
   }
 
+  const oewMoment = WB_CONFIG.oew * WB_CONFIG.oewStation;
+
   const zfw = WB_CONFIG.oew + paxWeight + cargoWeight;
-  const zfwMoment = WB_CONFIG.oewMoment + paxMoment + cargoMoment;
+  const zfwMoment = oewMoment + paxMoment + cargoMoment;
+  // CG % MAC = (arm_in - LEMAC_in) / MAC_in × 100
   const zfwCG = ((zfwMoment / zfw) - WB_CONFIG.lemac) / WB_CONFIG.mac * 100;
 
   const tow = zfw + fuelKg;
-  const towMoment = zfwMoment + fuelKg * WB_CONFIG.fuel.arm;
+  const towMoment = zfwMoment + fuelKg * WB_CONFIG.fuel.station;
   const towCG = ((towMoment / tow) - WB_CONFIG.lemac) / WB_CONFIG.mac * 100;
 
   const fuelBurn = Math.round(fuelKg * 0.72);
   const lw = tow - fuelBurn;
-  const lwMoment = towMoment - fuelBurn * WB_CONFIG.fuel.arm;
+  const lwMoment = towMoment - fuelBurn * WB_CONFIG.fuel.station;
   const lwCG = ((lwMoment / lw) - WB_CONFIG.lemac) / WB_CONFIG.mac * 100;
 
-  const towOk = tow <= WB_CONFIG.mtow;
-  const zfwOk = zfw <= WB_CONFIG.mzfw;
-  const lwOk = lw <= WB_CONFIG.mlw;
-  const cgFwdOk = towCG >= WB_CONFIG.fwdLimit;
-  const cgAftOk = towCG <= WB_CONFIG.aftLimit;
+  // Weight-dependent CG limits (interpolated from envelope polygon)
+  const towLimits = getCGLimits(WB_CONFIG, tow);
+  const zfwLimits = getCGLimits(WB_CONFIG, zfw);
+  const lwLimits  = getCGLimits(WB_CONFIG, lw);
+
+  const towOk  = tow <= WB_CONFIG.mtow;
+  const zfwOk  = zfw <= WB_CONFIG.mzfw;
+  const lwOk   = lw  <= WB_CONFIG.mlw;
+  const cgFwdOk = towCG >= towLimits.fwd;
+  const cgAftOk = towCG <= towLimits.aft;
   const allOk = towOk && zfwOk && lwOk && cgFwdOk && cgAftOk;
 
   async function handleSave() {
@@ -522,9 +598,9 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
       y += 5;
 
       const rows = [
-        { label: 'Zero Fuel Weight (ZFW)', weight: Math.round(zfw), cg: zfwCG, limit: WB_CONFIG.mzfw, ok: zfwOk },
+        { label: 'Zero Fuel Weight (ZFW)', weight: Math.round(zfw), cg: zfwCG, limit: WB_CONFIG.mzfw, ok: zfwOk && zfwCG >= zfwLimits.fwd && zfwCG <= zfwLimits.aft },
         { label: 'Take-Off Weight (TOW)', weight: Math.round(tow), cg: towCG, limit: WB_CONFIG.mtow, ok: towOk && cgFwdOk && cgAftOk },
-        { label: 'Landing Weight (LW)', weight: Math.round(lw), cg: lwCG, limit: WB_CONFIG.mlw, ok: lwOk },
+        { label: 'Landing Weight (LW)',  weight: Math.round(lw),  cg: lwCG,  limit: WB_CONFIG.mlw,  ok: lwOk  && lwCG  >= lwLimits.fwd  && lwCG  <= lwLimits.aft  },
       ];
       for (const row of rows) {
         doc.setFont('helvetica', 'normal');
@@ -544,7 +620,7 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(8);
       doc.setTextColor(80, 80, 80);
-      doc.text(`CG Envelope Limits: FWD ${WB_CONFIG.fwdLimit}% MAC — AFT ${WB_CONFIG.aftLimit}% MAC`, margin, y);
+      doc.text(`CG Limits at TOW: FWD ${towLimits.fwd.toFixed(1)}% MAC — AFT ${towLimits.aft.toFixed(1)}% MAC  |  LEMAC FS${WB_CONFIG.lemac}" MAC ${WB_CONFIG.mac}"`, margin, y);
       doc.setTextColor(0, 0, 0);
 
       y += 8;
@@ -574,36 +650,36 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(8);
       doc.text('Compartment / Zone', margin + 2, y);
-      doc.text('Qty / kg', margin + 90, y);
-      doc.text('Arm [m]', margin + 120, y);
-      doc.text('Moment [kg·m]', margin + 150, y);
+      doc.text('Qty / kg', margin + 85, y);
+      doc.text('FS [in]', margin + 118, y);
+      doc.text('Moment [kg·in]', margin + 145, y);
       y += 5;
 
       for (const zone of WB_CONFIG.zones) {
         const val = zoneValues[zone.id] ?? 0;
         const weight = zone.isKg ? val : val * paxWeightKg;
-        const moment = weight * zone.arm;
+        const moment = weight * zone.station;
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(9);
         doc.text(zone.label, margin + 2, y);
-        doc.text(zone.isKg ? `${val} kg` : `${val} pax (${weight} kg)`, margin + 90, y);
-        doc.text(zone.arm.toFixed(2), margin + 120, y);
-        doc.text(Math.round(moment).toLocaleString(), margin + 150, y);
+        doc.text(zone.isKg ? `${val} kg` : `${val} pax (${weight} kg)`, margin + 85, y);
+        doc.text(zone.station.toFixed(0), margin + 118, y);
+        doc.text(Math.round(moment).toLocaleString(), margin + 145, y);
         y += 6;
       }
       // Fuel row
       doc.setFont('helvetica', 'normal');
-      doc.text('Fuel (centre tank)', margin + 2, y);
-      doc.text(`${fuelKg} kg`, margin + 90, y);
-      doc.text(WB_CONFIG.fuel.arm.toFixed(2), margin + 120, y);
-      doc.text(Math.round(fuelKg * WB_CONFIG.fuel.arm).toLocaleString(), margin + 150, y);
+      doc.text('Fuel (wing tanks)', margin + 2, y);
+      doc.text(`${fuelKg} kg`, margin + 85, y);
+      doc.text(WB_CONFIG.fuel.station.toFixed(0), margin + 118, y);
+      doc.text(Math.round(fuelKg * WB_CONFIG.fuel.station).toLocaleString(), margin + 145, y);
       y += 6;
       // OEW row
       doc.setFont('helvetica', 'bold');
       doc.text('Operating Empty Weight', margin + 2, y);
-      doc.text(`${WB_CONFIG.oew.toLocaleString()} kg`, margin + 90, y);
-      doc.text(WB_CONFIG.oewArm.toFixed(2), margin + 120, y);
-      doc.text(Math.round(WB_CONFIG.oewMoment).toLocaleString(), margin + 150, y);
+      doc.text(`${WB_CONFIG.oew.toLocaleString()} kg`, margin + 85, y);
+      doc.text(WB_CONFIG.oewStation.toFixed(0), margin + 118, y);
+      doc.text(Math.round(oewMoment).toLocaleString(), margin + 145, y);
 
       y += 14;
       // ── Signatures ───────────────────────────────────────
@@ -681,25 +757,35 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
     </div>
   );
 
-  // CG Envelope SVG
+  // ── CG Envelope SVG ───────────────────────────────────────────────────────
+  // Draws the actual weight-dependent envelope polygon from WB_CONFIG.envelope
   const envWidth = 280, envHeight = 120;
-  const wRange = WB_CONFIG.mtow - WB_CONFIG.oew;
-  const cgRange = WB_CONFIG.aftLimit - WB_CONFIG.fwdLimit + 6;
-  const cgMin = WB_CONFIG.fwdLimit - 3;
+  const cgPad = 4; // % MAC padding around envelope
+  const allFwd = WB_CONFIG.envelope.map(p => p.fwd);
+  const allAft = WB_CONFIG.envelope.map(p => p.aft);
+  const cgMin = Math.min(...allFwd) - cgPad;
+  const cgMax = Math.max(...allAft) + cgPad;
+  const cgRange = cgMax - cgMin;
+  const wMin = WB_CONFIG.oew, wMax = WB_CONFIG.mtow;
+  const wRange = wMax - wMin;
+
   function toSvg(w: number, cg: number) {
     return {
       x: ((cg - cgMin) / cgRange) * envWidth,
-      y: envHeight - ((w - WB_CONFIG.oew) / wRange) * (envHeight - 10) - 5,
+      y: envHeight - ((w - wMin) / wRange) * (envHeight - 14) - 7,
     };
   }
-  const fwd = WB_CONFIG.fwdLimit, aft = WB_CONFIG.aftLimit;
-  const oewW = WB_CONFIG.oew, mtowW = WB_CONFIG.mtow;
-  const points = [toSvg(oewW, fwd), toSvg(oewW, aft), toSvg(mtowW, aft), toSvg(mtowW, fwd + 1)];
-  const polyStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const clamp = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
-  const towPt = toSvg(clamp(tow, oewW, mtowW * 1.02), clamp(towCG, cgMin + 0.2, cgMin + cgRange - 0.2));
-  const zfwPt = toSvg(clamp(zfw, oewW, mtowW * 1.02), clamp(zfwCG, cgMin + 0.2, cgMin + cgRange - 0.2));
-  const cgTicks = [fwd, Math.round((fwd + aft) / 2), aft];
+  // Build envelope polygon: left edge (fwd limits top→bottom) + right edge (aft limits bottom→top)
+  const envPts = [
+    ...WB_CONFIG.envelope.map(p => toSvg(p.weight, p.fwd)),
+    ...[...WB_CONFIG.envelope].reverse().map(p => toSvg(p.weight, p.aft)),
+  ];
+  const polyStr = envPts.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+  const towPt = toSvg(clamp(tow, wMin, wMax), clamp(towCG, cgMin + 0.5, cgMax - 0.5));
+  const zfwPt = toSvg(clamp(zfw, wMin, wMax), clamp(zfwCG, cgMin + 0.5, cgMax - 0.5));
+  const cgTicks = [Math.ceil(cgMin), Math.round((cgMin + cgMax) / 2), Math.floor(cgMax)];
 
   return (
     <div className="p-4 max-w-2xl mx-auto space-y-4">
@@ -732,8 +818,8 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
             </div>
           ))}
           <div>
-            <label className="text-xs text-gray-400 mb-1 block">Palivo [kg] (max {Math.round(WB_CONFIG.mtow * 0.32)})</label>
-            <input type="number" min={0} max={Math.round(WB_CONFIG.mtow * 0.32)}
+            <label className="text-xs text-gray-400 mb-1 block">Palivo [kg] (max {WB_CONFIG.fuel.maxKg})</label>
+            <input type="number" min={0} max={WB_CONFIG.fuel.maxKg}
               value={fuelKg} onChange={e => setFuelKg(+e.target.value)}
               className="w-full bg-black/30 border border-white/10 rounded-lg px-3 py-2 text-sm text-white text-center outline-none" />
           </div>
@@ -765,10 +851,10 @@ function WeightBalance({ pilotName, company }: { pilotName: string; company: str
           <circle cx={towPt.x} cy={towPt.y} r="5" fill={allOk ? '#10b981' : '#ef4444'} stroke="white" strokeWidth="1.5" />
           <text x={towPt.x + 8} y={towPt.y + 4} fontSize="9" fill={allOk ? '#6ee7b7' : '#fca5a5'}>TOW</text>
         </svg>
-        <div className="flex gap-4 mt-2 text-xs text-gray-400">
+        <div className="flex gap-4 mt-2 text-xs text-gray-400 flex-wrap">
           <span>● ZFW: {zfwCG.toFixed(1)}% MAC</span>
           <span className={allOk ? 'text-emerald-400' : 'text-red-400'}>● TOW: {towCG.toFixed(1)}% MAC</span>
-          <span>Limity: {WB_CONFIG.fwdLimit}–{WB_CONFIG.aftLimit}% MAC</span>
+          <span>Limity @ TOW: {towLimits.fwd.toFixed(1)}–{towLimits.aft.toFixed(1)}% MAC</span>
         </div>
       </div>
 
