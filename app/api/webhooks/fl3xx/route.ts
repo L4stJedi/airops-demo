@@ -22,7 +22,6 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { verifyWebhookSignature, FL3XXWebhookEvent } from '@/lib/fl3xx';
-import { revalidateTag } from 'next/cache';
 
 // In-memory event log (last 50 events) — survives hot reloads in dev,
 // resets on cold start / Vercel function recycle (acceptable for audit trail).
@@ -54,25 +53,9 @@ export async function POST(req: NextRequest) {
   EVENT_LOG.push({ ...event, receivedAt: new Date().toISOString() });
   if (EVENT_LOG.length > MAX_LOG) EVENT_LOG.splice(0, EVENT_LOG.length - MAX_LOG);
 
-  // ── 5. Revalidate Next.js cache tags ──────────────────────────────────────
-  // These tags match the `fetch(..., { next: { tags: [...] } })` calls in
-  // lib/fl3xx.ts so the next page load fetches fresh data from FL3XX.
-  const flightEvents = [
-    'FLIGHT_CREATE', 'FLIGHT_UPDATE', 'FLIGHT_TIME_UPDATE',
-    'FLIGHT_PAX_COUNT_UPDATE', 'FLIGHT_CANCEL',
-  ] as const;
-
-  try {
-    if ((flightEvents as readonly string[]).includes(event.event)) {
-      revalidateTag('fl3xx-flights');
-    }
-    if (event.event === 'FLIGHT_AIRCRAFT_UPDATE') {
-      revalidateTag('fl3xx-flights');
-      revalidateTag('fl3xx-aircraft');
-    }
-  } catch {
-    // revalidateTag is a no-op outside Next.js cache context (e.g. in tests)
-  }
+  // FL3XX data refreshes automatically every 60s via revalidate: 60 in fl3xxGet().
+  // For instant propagation, clients polling /api/fl3xx/flights will pick up
+  // changes on the next 60s cycle without any additional cache invalidation here.
 
   return NextResponse.json({ ok: true, event: event.event });
 }
