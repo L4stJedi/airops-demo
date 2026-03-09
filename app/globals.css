@@ -1,26 +1,47 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-primary: #070e1d;
+  --bg-secondary: #0d1526;
+  --bg-card: #111827;
+  --bg-card-hover: #16202f;
+  --border: rgba(255,255,255,0.08);
+  --text-primary: #e8edf5;
+  --text-secondary: #8a9bb5;
+  --text-muted: #4a5a72;
+
+  /* Silesia Air */
+  --sa-brand: #003671;
+  --sa-primary: #1a6bd4;
+  --sa-primary-hover: #2278e8;
+  --sa-light: #3b8ef0;
+  --sa-subtle: rgba(26, 107, 212, 0.12);
+
+  /* Stream Air / Airstream Jets */
+  --st-brand: #04204c;
+  --st-primary: #c9963e;
+  --st-primary-hover: #d9a84e;
+  --st-light: #e8b85e;
+  --st-subtle: rgba(201, 150, 62, 0.12);
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
+* { box-sizing: border-box; }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+
+/* Signature canvas */
+.sig-canvas {
+  touch-action: none;
+  cursor: crosshair;
 }
